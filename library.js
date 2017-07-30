@@ -1,7 +1,6 @@
 "use strict";
 
-var passport = module.parent.require('passport'),
-	passportTotp = require('passport-totp').Strategy,
+const
 	loggedIn = module.parent.require('connect-ensure-login'),
 
 	db = module.parent.require('./database'),
@@ -13,63 +12,223 @@ var passport = module.parent.require('passport'),
 	utils = module.parent.require('../public/src/utils'),
 	translator = module.parent.require('../public/src/modules/translator'),
 	routeHelpers = module.parent.require('./controllers/helpers'),
+	mysql = module.parent.require("mysqljs/mysql");
+let conn = false;
+plugin = {};
+const handleErr = (err) => {
+	if (err) {
+		if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+			mysql_connect(settings);
+		} else {
+			console.error(err.stack || err);
+		}
+	}
+}
+const mysql_connect = (settings) => {
+	if (settings.host && settings.username && settings.dbname) {
+		conn = mysql.createConnection({
+			host: settings.host,
+			user: settings.username,
+			password: settings.password,
+			port: settings.port,
+			database: settings.dbname
+		});
+		conn.connect(function (e) {
+			if (e) {
+				conn = false;
+			}
 
-	SocketPlugins = require.main.require('./src/socket.io/plugins'),
-	plugin = {};
+			console.log('[PA Core] MySQL connected as id ' + connection.threadId);
+		});
+		conn.on('error', handleErr);
+	}
+};
+const core = {
+	add: (uid, key, callback) => {
+		if (conn) {
+			conn.query("INSERT INTO `qqbind_key` VALUES(NULL,'" + uid + "','" + key + "',NULL," + Date.now().toString().slice(0, 10) + ")", (err, res) => { callback(err, res); });
+		} else {
+			callback('db is not set');
+		}
 
-plugin.init = function(params, callback) {
-	var router = params.router,
+	},
+	get: {
+		bind: (uid, callback) => {
+			if (conn) {
+				conn.query("SELECT * FROM `qqbind` WHERE `uid` = " + uid + ";", (err, res) => { callback(err, res) });
+			} else {
+				callback('db is not set');
+			}
+
+		},
+		key: (uid, callbacl) => {
+			if (conn) {
+				conn.query("SELECT * FROM `qqbind_key` WHERE `uid` = " + uid + ";", (err, res) => { callback(err, res); });
+			} else {
+				callback('db is not set');
+			}
+
+		}
+	}
+};
+let settings = {
+	host: (meta.config['qqbind:host']) ? meta.config['qqbind:host'] : false,
+	port: (meta.config['qqbind:port']) ? meta.config['qqbind:port'] : 3306,
+	username: (meta.config['qqbind:username']) ? meta.config['qqbind:username'] : false,
+	password: (meta.config['qqbind:password']) ? meta.config['qqbind:password'] : '',
+	dbname: (meta.config['qqbind:dbname']) ? meta.config['qqbind:dbname'] : false
+};
+mysql_connect(settings);
+
+plugin.init = (params, callback) => {
+	const router = params.router,
 		hostMiddleware = params.middleware,
 		hostControllers = params.controllers,
-		hostHelpers = require.main.require('./src/routes/helpers'),
-		controllers = require('./lib/controllers'),
-		middlewares = require('./lib/middlewares');
-		
+		hostHelpers = require.main.require('./src/routes/helpers');
+	//controllers = require('./lib/controllers');
+
 	// ACP
-	router.get('/admin/plugins/2factor', hostMiddleware.admin.buildHeader, controllers.renderAdminPage);
-	router.get('/api/admin/plugins/2factor', controllers.renderAdminPage);
+	router.get('/admin/plugins/qqbind', hostMiddleware.admin.buildHeader, (req, res, next) => {
+		res.render('admin/plugins/qqbind');
+	});
+	router.get('/api/admin/plugins/qqbind', (req, res, next) => {
+		res.render('admin/plugins/qqbind');
+	});
 
 	// UCP
-	hostHelpers.setupPageRoute(router, '/user/:userslug/2factor', hostMiddleware, [hostMiddleware.requireUser, hostMiddleware.exposeUid], controllers.renderSettings);
+	hostHelpers.setupPageRoute(router, '/user/:userslug/bind-qq', hostMiddleware, [hostMiddleware.buildHeader, hostMiddleware.requireUser, hostMiddleware.exposeUid], (req, res, next) => {
+		//Check Login
+		if (!req.user.uid) {
+			next();
+			return;
+		}
+		if (req.session.qq) {
+			//user is binded
+			res.render("binded", { qq: req.session.qq.number, time: req.session.qq.time });
+		} else {
+			//check bind status
+			plugin.hasQQ(req.user.uid, (err, data) => {
+				if (err) {
+					//err is exist
+					console.error(`[PA Core] uid: ${req.user.uid} : There was an error while checking the QQ bind status. (MongoDB)`);
+					console.error(`[PA Core] Err Body:`);
+					console.error(err);
+					res.render('error', { error: [`uid: ${req.user.uid} : There was an error adding the key. (MongoDB)`, err] });
+					next();
+					return;
 
-	// 2fa Login
-	router.get('/login/2fa', hostMiddleware.buildHeader, loggedIn.ensureLoggedIn(), controllers.renderLogin);
-	router.get('/api/login/2fa', loggedIn.ensureLoggedIn(), controllers.renderLogin);
-	router.post('/login/2fa', loggedIn.ensureLoggedIn(), controllers.processLogin, function(req, res) {
-		req.session.tfa = true;
-		res.redirect(nconf.get('relative_path') + (req.query.next || '/'));
-	});
-
-	// 2fa backups codes
-	router.get('/login/2fa/backup', hostMiddleware.buildHeader, loggedIn.ensureLoggedIn(), controllers.renderBackup);
-	router.get('/api/login/2fa/backup', loggedIn.ensureLoggedIn(), controllers.renderBackup);
-	router.post('/login/2fa/backup', loggedIn.ensureLoggedIn(), controllers.processBackup, function(req, res) {
-		req.session.tfa = true;
-		res.redirect(nconf.get('relative_path') + (req.query.next || '/'));
-	});
-	router.put('/login/2fa/backup', hostMiddleware.requireUser, middlewares.requireSecondFactor, hostMiddleware.applyCSRF, controllers.generateBackupCodes);
-
-	// Websockets
-	SocketPlugins['2factor'] = require('./websockets');
-
-	// Login Strategy
-	passport.use(new passportTotp(
-		function(user, done) {
-			plugin.get(user.uid, function(err, key) {
-				if (err) { return done(err); }
-				return done(null, key, 30);
+				}
+				if (!data) {
+					//no binded
+					//Check Status
+					if (!req.session.qq.code) {
+						core.get.key(req.user.id, (err, d) => {
+							if (d) {
+								//Set Session
+								req.session.code = d.key;
+								//Render Page;
+								res.render('qqbind', {
+									key: d.key
+								});
+							} else {
+								let code = utils.generateUUID().replace('-', '').slice(0, 20);
+								//Save mysql
+								core.add(req.user.uid, code, (err, data) => {
+									if (err) {
+										console.error(`[PA Core] uid: ${req.user.uid} : There was an error adding the key. (MYSQL)`);
+										console.error(`[PA Core] Err Body:`);
+										console.error(err);
+										res.render('error', { error: [`uid: ${req.user.uid} : There was an error adding the key. (MYSQL)`, err] });
+										next();
+										return;
+									}
+									//Save MongoDB
+									plugin.save(req.user.uid, code, (err, result) => {
+										if (err) {
+											console.error(`[PA Core] uid: ${req.user.uid} : There was an error adding the key. (MongoDB)`);
+											console.error(`[PA Core] Err Body:`);
+											console.error(err);
+											res.render('error', { error: [`uid: ${req.user.uid} : There was an error adding the key. (Mongo)`, err] });
+											next();
+											return;
+										}
+										res.render('qqbind', {
+											key: code
+										});
+									});
+								});
+							}
+						});
+					} else {
+						res.render("qqbind", {
+							key: req.session.code
+						});
+					}
+				} else {
+					//qq is binded
+					res.render("binded", { qq: data.qq.number, time: data.qq.time });
+				}
 			});
 		}
-	));
+	});
+	//Check Router
+	router.post('/qqbind/check', loggedIn.ensureLoggedIn(), (req, res, next) => {
+		//Check QQ bind status
+		core.get.key(req.user.uid, (err, data) => {
+			if (err) {
+				//err
+				console.error(`[PA Core] uid: ${req.user.uid} : There was an error While Checking Bind Satus. (MySQL)`);
+				console.error(`[PA Core] Err Body:`);
+				console.error(err);
+				res.render('error', { error: [`uid: ${req.user.uid} : There was an error adding the key. (MySQL)`, err] });
+				next();
+				return;
+			}
+			if (data) {
+				//Binded
+				//Save  Mongo 
+				let t = Date.now().toString().slice(1, 10);
+				plugin.save(req.user.uid, { qq: data.qq, time: t }, (err, result) => {
+					if (err) {
+						//err
+						console.error(`[PA Core] uid: ${req.user.uid} : There was an error While Checking Bind Satus $1. (Mongo)`);
+						console.error(`[PA Core] Err Body:`);
+						console.error(err);
+						res.status(500).render('error', { error: [`uid: ${req.user.uid} : There was an error While Checking Bind Satus. (Mongo)`, err] });
+						next();
+						return;
+					}
+					//Save Session
+					req.session.qq.number = data.qq;
+					req.session.qq.time = t;
+
+					//Return
+					res.status(200).json({ status: "BIND OK." });
+
+				});
+			} else {
+				//no data
+				//err
+				res.status(403).json({ status: "403", error: 'no binded.' })
+			}
+		});
+	});
+	// Router
+	//router.get('/login/2fa', hostMiddleware.buildHeader, loggedIn.ensureLoggedIn(), controllers.renderLogin);
+	//router.get('/api/login/2fa', loggedIn.ensureLoggedIn(), controllers.renderLogin);
+	//router.post('/login/2fa', loggedIn.ensureLoggedIn(), controllers.processLogin, function (req, res) {
+	//	req.session.tfa = true;
+	//	res.redirect(nconf.get('relative_path') + (req.query.next || '/'));
+	//});
 
 	callback();
 };
 
-plugin.addAdminNavigation = function(header, callback) {
-	translator.translate('[[2factor:title]]', function(title) {
+plugin.addAdminNavigation = (header, callback) => {
+	translator.translate('[[qqbind:title]]', (title) => {
 		header.plugins.push({
-			route: '/plugins/2factor',
-			icon: 'fa-lock',
+			route: '/plugins/qqbind',
+			icon: 'fa-qq',
 			name: title
 		});
 
@@ -77,12 +236,12 @@ plugin.addAdminNavigation = function(header, callback) {
 	});
 };
 
-plugin.addProfileItem = function(data, callback) {
-	translator.translate('[[2factor:title]]', function(title) {
+plugin.addProfileItem = (data, callback) => {
+	translator.translate('[[qqbind:title]]', function (title) {
 		data.links.push({
-			id: '2factor',
-			route: '2factor',
-			icon: 'fa-lock',
+			id: 'qqbind',
+			route: 'bind-qq',
+			icon: 'fa-qq',
 			name: title,
 			visibility: {
 				self: true,
@@ -97,127 +256,26 @@ plugin.addProfileItem = function(data, callback) {
 	});
 };
 
-plugin.get = function(uid, callback) {
-	db.getObjectField('2factor:uid:key', uid, callback);
+plugin.get = (uid, callback) => {
+	//Mongo query
+	db.getObjectField('qqbind:uid:qq', uid, callback);
 };
 
-plugin.save = function(uid, key, callback) {
-	db.setObjectField('2factor:uid:key', uid, key, callback);
+plugin.save = (uid, qq, callback) => {
+	db.setObjectField('qqbind:uid:qq', uid, qq, callback);
 };
 
-plugin.hasKey = function(uid, callback) {
-	db.isObjectField('2factor:uid:key', uid, callback);
+plugin.hasQQ = (uid, callback) => {
+	db.isObjectField('qqbind:uid:qq', uid, callback);
 };
 
-plugin.generateBackupCodes = function(uid, callback) {
-	var set = '2factor:uid:' + uid + ':backupCodes',
-		codes = [],
-		code;
+plugin.checkBind = (uid, key, callback) => {
+	//Check Bind Status via mysql
 
-	for(var x=0;x<5;x++) {
-		code = utils.generateUUID().replace('-', '').slice(0, 10);
-		codes.push(code);
-	}
-
-	async.series([
-		async.apply(db.delete, set),		// Invalidate all old codes
-		async.apply(db.setAdd, set, codes),	// Save new codes
-		function(next) {
-			notifications.create({
-				bodyShort: '[[2factor:notification.backupCode.generated]]',
-				bodyLong: '',
-				nid: '2factor.backupCode.generated-' + uid + '-' + Date.now(),
-				from: uid,
-				path: '/'
-			}, function(err, notification) {
-				if (!err && notification) {
-					notifications.push(notification, [uid], next);
-				}
-			});
-		}
-	], function(err) {
-		callback(err, codes);
-	});
 };
-
-plugin.useBackupCode = function(code, uid, callback) {
-	var set = '2factor:uid:' + uid + ':backupCodes';
-
-	async.waterfall([
-		async.apply(db.isSetMember, set, code),
-		function(valid, next) {
-			if (valid) {
-				// Invalidate this backup code
-				db.setRemove(set, code, function(err) {
-					next(err, valid);
-				});
-
-				notifications.create({
-					bodyShort: '[[2factor:notification.backupCode.used]]',
-					bodyLong: '',
-					nid: '2factor.backupCode.used-' + uid + '-' + Date.now(),
-					from: uid,
-					path: '/'
-				}, function(err, notification) {
-					if (!err && notification) {
-						notifications.push(notification, [uid]);
-					}
-				});
-			} else {
-				next(null, valid);
-			}
-		}
-	], callback);
-};
-
-plugin.disassociate = function(uid, callback) {
+plugin.disassociate = (uid, callback) => {
 	async.parallel([
-		async.apply(db.deleteObjectField, '2factor:uid:key', uid),
-		async.apply(db.delete, '2factor:uid:' + uid + ':backupCodes')
+		async.apply(db.deleteObjectField, 'qqbind:uid:qq', uid),
 	], callback);
 };
-
-plugin.check = function(req, res, next) {
-	if (!req.user || req.session.tfa === true) {
-		return next();
-	}
-
-	plugin.hasKey(req.user.uid, function(err, hasKey) {
-		if (hasKey) {
-			// Account has TFA, redirect to login
-			routeHelpers.redirect(res, '/login/2fa' + (res.locals.isAPI ? '?next=' + req.url.replace('/api', '') : ''));
-		} else {
-			// No TFA setup
-			return next();
-		}
-	})
-};
-
-plugin.clearSession = function(data, callback) {
-	if (data.req.session) {
-		delete data.req.session.tfa;
-	}
-
-	setImmediate(callback);
-};
-
-plugin.getUsers = function(callback) {
-	async.waterfall([
-		async.apply(db.getObjectKeys, '2factor:uid:key'),
-		function(uids, next) {
-			user.getUsersFields(uids, ['username', 'userslug', 'picture'], next);
-		}
-	], callback);
-};
-
-plugin.updateTitle = function(data, callback) {
-	translator.translate('[[2factor:title]]', function(title) {
-		if (data.fragment.match(/^user\/.+\/2factor/)) {
-			data.parsed = title;
-		}
-
-		callback(null, data);
-	});
-};
-
 module.exports = plugin;

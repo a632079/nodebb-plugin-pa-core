@@ -1,33 +1,29 @@
 {
-  "name": "nodebb-plugin-2factor",
-  "version": "2.2.2",
+  "name": "nodebb-plugin-pa-core",
+  "version": "0.0.1",
   "description": "",
   "main": "library.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/julianlam/nodebb-plugin-2factor"
+    "url": "https://github.com/a632079/nodebb-plugin-api-qqbind"
   },
   "keywords": [
     "nodebb",
-    "plugin",
-    "authentication",
-    "2factor"
+    "plugin"
   ],
   "author": {
-    "name": "Julian Lam",
-    "email": "julian@nodebb.org"
+    "name": "a632079",
+    "email": "a632079@qq.com"
   },
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/julianlam/nodebb-plugin-2factor/issues"
+    "url": "https://github.com/a632079/nodebb-plugin-pa-core/issues"
   },
   "readmeFilename": "README.md",
   "nbbpm": {
     "compatibility": "^1.2.0"
   },
   "dependencies": {
-    "notp": "^2.0.3",
-    "passport-totp": "0.0.2",
-    "thirty-two": "0.0.2"
+    "mysql":"^2.14.0"
   }
 }

@@ -1,0 +1,15 @@
+{
+	"admin.info":"欢迎使用QQ BIND服务，本服务处于内测版本，暂未公开使用：）",
+	"admin.info.beta":"并不是发布插件，仅供自用！No English Support!",
+	"admin.host":"主机名",
+	"admin.username":"用户名",
+	"admin.password":"密码",
+	"admin.dbname":"数据库名",
+	"admin.port":"端口名",
+	"admin.host.e":"localhost",
+	"admin.username.e":"root",
+	"admin.password.e":"password",
+	"admin.dbname.e":"db",
+	"admin.port.e":"3306",
+	"admin.save":"保存"
+}
