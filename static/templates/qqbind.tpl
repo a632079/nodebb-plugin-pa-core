@@ -9,6 +9,8 @@
 				<p>
 					欢迎使用QQ绑定服务，为了保证您的服务质量，请确保您需要绑定的号码真实有效！
 				</p>
+				<strong>如何绑定?</strong>
+				<p>添加QQ:<code>1793323889</code>,然后私聊他，输入<code>/社区绑定 + 您的绑定代码</code>。最后别忘了点击下方的 检测绑定 完成最后的绑定！</p>
 				<!-- IF error -->
 				<div class="alert alert-danger">
 					{error}

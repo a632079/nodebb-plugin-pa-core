@@ -12,7 +12,7 @@ const
 	utils = module.parent.require('../public/src/utils'),
 	translator = module.parent.require('../public/src/modules/translator'),
 	routeHelpers = module.parent.require('./controllers/helpers'),
-	mysql = module.parent.require("mysql");
+	mysql = require("mysql");
 let pool = false,
 	code,
 	plugin = {};
@@ -27,7 +27,7 @@ const handleErr = (err) => {
 			console.error(err.stack || err);
 		}
 	}
-}
+};
 const mysql_connect = (settings) => {
 	if (settings.host && settings.username && settings.dbname) {
 		pool = mysql.createPool({
@@ -75,7 +75,17 @@ const core = {
 			}
 
 		}
+	},
+	update: {
+		key: (uid, key, callback) => {
+			if (pool) {
+				pool.query("UPDATE `community`.`qqbind_key` SET `key` = " + key + " WHERE `uid` = " + uid + ";", (err, res) => { callback(err, res) });
+			} else {
+				callback("db is not set.");
+			}
+		}
 	}
+
 };
 let settings = {
 	host: (meta.config['qqbind:host']) ? meta.config['qqbind:host'] : false,
@@ -106,11 +116,12 @@ plugin.init = (params, callback) => {
 		//Check Login
 		if (!req.user.uid) {
 			next();
-			return;
 		}
-		if (req.session.qq) {
+		console.log(req.session);
+		if (req.session.hasOwnProperty('qq') && req.session.qq.hasOwnProperty('number') && req.session.qq.hasOwnProperty('time')) {
 			//user is binded
-			res.render("binded", { qq: req.session.qq.number, time: req.session.qq.time });
+			let bind_time = new Date(parseInt(req.session.qq.time + "000"));
+			res.render("binded", { qq: req.session.qq.number, time: bind_time.getFullYear() + "年" + (bind_time.getMonth() + 1) + "月" + bind_time.getDate() + "日 " + bind_time.getHours() + ":" + bind_time.getMinutes() });
 		} else {
 			//check bind status
 			plugin.hasQQ(req.user.uid, (err, data) => {
@@ -119,11 +130,11 @@ plugin.init = (params, callback) => {
 					console.error(`[PA Core] uid: ${req.user.uid} : There was an error while checking the QQ bind status. (MongoDB)`);
 					console.error(`[PA Core] Err Body:`);
 					console.error(err);
-					res.render('error', { error: `uid: ${req.user.uid} : There was an error adding the key. (MongoDB)`, info: err });
-					next();
+					res.render('error', { error: `uid: ${req.user.uid} : There was an error adding the key. (MongoDB)`, info: JSON.stringify(err) });
 					return;
 
 				}
+				console.log(data);
 				if (!data) {
 					//no binded
 					//Check Status
@@ -144,8 +155,7 @@ plugin.init = (params, callback) => {
 										console.error(`[PA Core] uid: ${req.user.uid} : There was an error adding the key. (MYSQL)`);
 										console.error(`[PA Core] Err Body:`);
 										console.error(err);
-										res.render('error', { error: `uid: ${req.user.uid} : There was an error adding the key. (MYSQL)`, info: err });
-										next();
+										res.render('error', { error: `uid: ${req.user.uid} : There was an error adding the key. (MYSQL)`, info: JSON.stringify(err) });
 										return;
 									}
 									//Save MongoDB
@@ -154,8 +164,7 @@ plugin.init = (params, callback) => {
 											console.error(`[PA Core] uid: ${req.user.uid} : There was an error adding the key. (MongoDB)`);
 											console.error(`[PA Core] Err Body:`);
 											console.error(err);
-											res.render('error', { error: `uid: ${req.user.uid} : There was an error adding the key. (Mongo)`, info: err });
-											next();
+											res.render('error', { error: `uid: ${req.user.uid} : There was an error adding the key. (Mongo)`, info: JSON.stringify(err) });
 											return;
 										}
 										req.session.qbkey = code;
@@ -173,17 +182,27 @@ plugin.init = (params, callback) => {
 					}
 				} else {
 					//qq is binded
-					res.render("binded", { qq: data.qq.number, time: data.qq.times });
+					plugin.get(req.user.uid, (e, d) => {
+						if (e) {
+							console.log(e);
+							res.render("error", { error: e })
+						}
+						//Save Session
+						req.session.qq = {};
+						req.session.qq.number = d.qq;
+						req.session.qq.time = d.times;
+						let bind_time = new Date(parseInt(d.times + "000"));
+						res.render("binded", { qq: d.qq, time: bind_time.getFullYear() + "年" + (bind_time.getMonth() + 1) + "月" + bind_time.getDate() + "日 " + bind_time.getHours() + ":" + bind_time.getMinutes() });
+					});
 				}
 			});
 		}
 	});
 	//Check Router
-	router.get('/qqbind/check', loggedIn.ensureLoggedIn(), (req, res, next) => {
+	router.post('/qqbind/check', loggedIn.ensureLoggedIn(), (req, res, next) => {
 		//Check QQ bind status
 		//Check Session
-		req.session.qq.number, req.session.qq.time = null;
-		if (req.session.qq.number && req.session.qq.time) {
+		if (req.session.hasOwnProperty('qq') && req.session.qq.hasOwnProperty('number') && req.session.qq.hasOwnProperty('time')) {
 			res.status(200).json({ status: "403", error: "You have binded.Please not try again.", data: "" });
 		} else {
 			//Check Mongo
@@ -212,7 +231,7 @@ plugin.init = (params, callback) => {
 						if (data.length == 1) { //Just Bind One QQ number
 							//Binded
 							//Save  Mongo 
-							let t = Date.now().toString().slice(1, 10);
+							let t = Date.now().toString().slice(0, 10);
 							plugin.save(req.user.uid, { qq: data[0].qq, times: t }, (err, result) => {
 								if (err) {
 									//err
@@ -220,18 +239,16 @@ plugin.init = (params, callback) => {
 									console.error(`[PA Core] Err Body:`);
 									console.error(err);
 									res.status(500).render('error', { error: `uid: ${req.user.uid} : There was an error While Checking Bind Satus. (Mongo)`, info: err });
-									next();
 									return;
 								}
 								//Save Session
 								req.session.qq = {};
-								req.session.qq.number = data.qq;
+								req.session.qq.number = data[0].qq;
 								req.session.qq.time = t;
-
 								//Return
 								res.status(200).json({ status: "200", data: "BIND OK." });
-
 							});
+
 						} else {
 							//no data
 							//err
@@ -243,8 +260,74 @@ plugin.init = (params, callback) => {
 		}
 	});
 	// Router
-	router.get('/qq-bind/regenerate', loggedIn.ensureLoggedIn(), (req, res, next) => {
-		
+	router.post('/qq-bind/regenerate', loggedIn.ensureLoggedIn(), (req, res, next) => {
+		if (req.session.qkt && (parseInt(Date.now().toString().slice(0, 10)) - req.session.qkt) < 60 * 60 * 24) {
+			//limit regenerate time
+			res.status(403).json({ status: "403", error: 'no key is exist.', data: "" });
+			return;
+		}
+		//Check Status
+		if (!req.session.qbkey) {
+			plugin.hasKey(req.user.uid, (err, data) => {
+				if (err) {
+					//err
+					console.error(`[PA Core] uid: ${req.user.uid} : There was an error While Checking Bind Satus $1. (Mongo)`);
+					console.error(`[PA Core] Err Body:`);
+					console.error(err);
+					res.status(500).render('error', { error: `uid: ${req.user.uid} : There was an error While Checking Bind Satus. (Mongo)`, info: err });
+					return;
+				}
+				if (data) {
+					//Regenerate Key
+					let code = utils.generateUUID().replace(/-/g, '').slice(0, 20);
+					plugin.saveKey(req.user.uid, code, (e, d) => {
+						if (e) {
+							console.error(`[PA Core] uid: ${req.user.uid} : There was an error While Checking Bind Satus $1. (Mongo)`);
+							console.error(`[PA Core] Err Body:`);
+							console.error(e);
+							res.status(500).json({ status: 500, error: `uid: ${req.user.uid} : There was an error While Checking Bind Satus. (Mongo)`, info: e });
+						}
+						core.update.key(req.user.uid, code, (err, ret) => {
+							if (error) {
+								console.error(`[PA Core] uid: ${req.user.uid} : There was an error While Checking Bind Satus $1. (Mongo)`);
+								console.error(`[PA Core] Err Body:`);
+								console.error(error);
+								res.status(500).json({ status: 500, error: `uid: ${req.user.uid} : There was an error While Checking Bind Satus. (Mongo)`, info: err });
+							}
+							req.session.qbkey = code;
+							req.session.qkt = parseInt(Date.now().toString().slice(0, 10));
+							res.status(200).json({ status: 200, data: "regenerate ok.." });
+
+						});
+					});
+				} else {
+					res.status(403).json({ status: "403", error: 'no key is exist.', data: "" });
+				}
+
+			});
+		} else {
+			let code = utils.generateUUID().replace(/-/g, '').slice(0, 20);
+			plugin.saveKey(req.user.uid, code, (e, d) => {
+				if (e) {
+					console.error(`[PA Core] uid: ${req.user.uid} : There was an error While Checking Bind Satus $1. (Mongo)`);
+					console.error(`[PA Core] Err Body:`);
+					console.error(e);
+					res.status(500).json({ status: 500, error: `uid: ${req.user.uid} : There was an error While Checking Bind Satus. (Mongo)`, info: e });
+				}
+				core.update.key(req.user.uid, code, (err, ret) => {
+					if (error) {
+						console.error(`[PA Core] uid: ${req.user.uid} : There was an error While Checking Bind Satus $1. (Mongo)`);
+						console.error(`[PA Core] Err Body:`);
+						console.error(error);
+						res.status(500).json({ status: 500, error: `uid: ${req.user.uid} : There was an error While Checking Bind Satus. (Mongo)`, info: err });
+					}
+					req.session.qbkey = code;
+					req.session.qkt = parseInt(Date.now().toString().slice(0, 10));
+					res.status(200).json({ status: 200, data: "regenerate ok.." });
+
+				});
+			});
+		}
 	});
 	//router.get('/login/2fa', hostMiddleware.buildHeader, loggedIn.ensureLoggedIn(), controllers.renderLogin);
 	//router.get('/api/login/2fa', loggedIn.ensureLoggedIn(), controllers.renderLogin);
@@ -314,17 +397,16 @@ plugin.disassociate = (uid, callback) => {
 };
 plugin.setHeaderItem = (data, callback) => {
 	let req = data.req, res = data.req, templateData = data.templateData;
-	console.log(req.user);
-	console.log("--------------------------");
-	console.log("--------------------------");
+	//console.log(req.user);
+	//console.log("--------------------------");
+	//console.log("--------------------------");
 	//console.log(res);
-	console.log("--------------------------");
-	console.log("--------------------------");
-	console.log(templateData);
+	//c/onsole.log("--------------------------");
+	//console.log("--------------------------");
+	//console.log(templateData);
 	if (templateData.url.match(/user\/.+\/bind-qq/)) {
 		templateData.title = "绑定QQ";
 	}
-
 	data.req = req;
 	data.res = res;
 	data.templateData = templateData;
